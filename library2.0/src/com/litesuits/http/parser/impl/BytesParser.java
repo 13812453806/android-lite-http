@@ -1,10 +1,7 @@
 package com.litesuits.http.parser.impl;
 
-import com.litesuits.http.parser.MemeoryDataParser;
-import com.litesuits.http.request.AbstractRequest;
-import org.apache.http.util.ByteArrayBuffer;
+import com.litesuits.http.parser.MemCacheableParser;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -14,24 +11,22 @@ import java.io.InputStream;
  * @author MaTianyu
  *         2014-2-21下午8:56:59
  */
-public class BytesParser extends MemeoryDataParser<byte[]> {
-
-    public BytesParser(AbstractRequest<byte[]> request) {
-        super(request);
-    }
+public class BytesParser extends MemCacheableParser<byte[]> {
 
     @Override
-    public byte[] parseNetStream(InputStream stream, long len, String charSet, String cacheDir) throws IOException {
-        byte[] data = streamToByteArray(stream, len);
-        if(request.needCache()){
-            keepToCache(data,getSpecifyFile(cacheDir));
-        }
-        return data;
+    public byte[] parseNetStream(InputStream stream, long len, String charSet) throws IOException {
+        return streamToByteArray(stream, len);
     }
 
     @Override
     protected byte[] parseDiskCache(InputStream stream, long length) throws IOException {
         return streamToByteArray(stream, length);
+    }
+
+
+    @Override
+    protected boolean tryKeepToCache(byte[] data) throws IOException {
+        return keepToCache(data);
     }
 
 }

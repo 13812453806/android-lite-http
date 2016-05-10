@@ -1,8 +1,24 @@
+/*
+ * Copyright (C) 2013 litesuits.com
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
 package com.litesuits.http;
 
 import android.content.Context;
 import android.os.Build;
 import android.os.Environment;
+import android.util.Log;
 import com.litesuits.http.concurrent.OverloadPolicy;
 import com.litesuits.http.concurrent.SchedulePolicy;
 import com.litesuits.http.data.Consts;
@@ -44,7 +60,13 @@ public class HttpConfig {
     public static final int DEFAULT_MAX_REDIRECT_TIMES = 5;
     public static final int DEFAULT_HTTP_PORT = 80;
     public static final int DEFAULT_HTTPS_PORT = 443;
-    public static final int DEFAULT_TIMEOUT = 20000;
+    /**
+     * 20 second
+     */
+    public static final int DEFAULT_TIMEOUT = 20 * 1000;
+    /**
+     * 3 second
+     */
     public static final int DEFAULT_TRY_WAIT_TIME = 3000;
     public static final int DEFAULT_BUFFER_SIZE = 4096;
 
@@ -119,7 +141,7 @@ public class HttpConfig {
      * note: if context is not null, this default path will be reset by {@link #HttpConfig(android.content.Context)}.
      * if context is null, we need  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
      */
-    protected String cacheDirPath = Environment.getExternalStorageDirectory() + "/lite/http-cache";
+    protected String defaultCacheDir = Environment.getExternalStorageDirectory() + "/lite/http-cache";
 
     /**
      * set common headers to all request
@@ -140,7 +162,7 @@ public class HttpConfig {
     /**
      * set default cache expire time to all request
      */
-    protected long defaultCacheExpireMillis;
+    protected long defaultCacheExpireMillis = -1;
     /**
      * set default max number of retry to all request
      */
@@ -161,13 +183,24 @@ public class HttpConfig {
      * set global http scheme and host for uri.
      */
     protected String globalSchemeHost;
+    /**
+     * set debugged status
+     */
+    protected boolean debugged;
 
     public HttpConfig(Context context) {
         if (context != null) {
             this.context = context.getApplicationContext();
-            cacheDirPath = context.getFilesDir() + "/lite/http-cache";
         }
-        HttpLog.i(TAG, "lite http cache file dir: " + cacheDirPath);
+        setDefaultCacheDir(getDefaultCacheDir(context));
+    }
+
+    private String getDefaultCacheDir(Context context) {
+        if (context != null) {
+            return context.getFilesDir() + "/lite/http-cache";
+        } else {
+            return Environment.getExternalStorageDirectory() + "/lite/http-cache";
+        }
     }
 
     public HttpConfig(Context context, boolean doStatistics, boolean detectNetwork) {
@@ -308,17 +341,18 @@ public class HttpConfig {
         return this;
     }
 
-    public String getCacheDirPath() {
-        return cacheDirPath;
+    public String getDefaultCacheDir() {
+        return defaultCacheDir;
     }
 
-    public HttpConfig setCacheDirPath(String cacheDirPath) {
-        this.cacheDirPath = cacheDirPath;
-        File file = new File(cacheDirPath);
+    public HttpConfig setDefaultCacheDir(String defaultCacheDir) {
+        this.defaultCacheDir = defaultCacheDir;
+        File file = new File(defaultCacheDir);
         if (!file.exists()) {
             boolean mkdirs = file.mkdirs();
             HttpLog.i(TAG, file.getAbsolutePath() + "  mkdirs: " + mkdirs);
         }
+        HttpLog.i(TAG, "lite http cache file dir: " + defaultCacheDir);
         return this;
     }
 
@@ -413,10 +447,24 @@ public class HttpConfig {
         return this;
     }
 
-    /* ____________________________ enhanced methods ____________________________*/
+    public boolean isDebugged() {
+        return debugged;
+    }
 
+    /**
+     * when debugged is true, the {@link Log} is opened.
+     *
+     * @param debugged true if debugged
+     */
+    public HttpConfig setDebugged(boolean debugged) {
+        this.debugged = debugged;
+        HttpLog.isPrint = debugged;
+        return this;
+    }
+
+    /* ____________________________ enhanced methods ____________________________*/
     public boolean isDisableAllNetwork() {
-        return (disableNetworkFlags & HttpConfig.FLAG_NET_DISABLE_ALL) == FLAG_NET_DISABLE_ALL;
+        return (disableNetworkFlags & FLAG_NET_DISABLE_ALL) == FLAG_NET_DISABLE_ALL;
     }
 
     public boolean detectNetworkNeeded() {
@@ -443,7 +491,7 @@ public class HttpConfig {
         schedulePolicy = SchedulePolicy.FirstInFistRun;
         overloadPolicy = OverloadPolicy.DiscardOldTaskInQueue;
         maxMemCacheBytesSize = 512 * 1024;
-        cacheDirPath = Environment.getExternalStorageDirectory() + "/lite/http-cache";
+        defaultCacheDir = getDefaultCacheDir(context);
 
         commonHeaders = null;
         defaultCharSet = Consts.DEFAULT_CHARSET;
@@ -490,7 +538,8 @@ public class HttpConfig {
     @Override
     public String toString() {
         return "HttpConfig{" +
-               "context=" + context +
+               "liteHttp=" + liteHttp +
+               ", context=" + context +
                ", userAgent='" + userAgent + '\'' +
                ", connectTimeout=" + connectTimeout +
                ", socketTimeout=" + socketTimeout +
@@ -505,7 +554,7 @@ public class HttpConfig {
                ", schedulePolicy=" + schedulePolicy +
                ", overloadPolicy=" + overloadPolicy +
                ", maxMemCacheBytesSize=" + maxMemCacheBytesSize +
-               ", cacheDirPath='" + cacheDirPath + '\'' +
+               ", defaultCacheDir='" + defaultCacheDir + '\'' +
                ", commonHeaders=" + commonHeaders +
                ", defaultCharSet='" + defaultCharSet + '\'' +
                ", defaultHttpMethod=" + defaultHttpMethod +
@@ -515,7 +564,8 @@ public class HttpConfig {
                ", defaultMaxRedirectTimes=" + defaultMaxRedirectTimes +
                ", defaultModelQueryBuilder=" + defaultModelQueryBuilder +
                ", globalHttpListener=" + globalHttpListener +
-               ", globalSchemeHost=" + globalSchemeHost +
+               ", globalSchemeHost='" + globalSchemeHost + '\'' +
+               ", debugged=" + debugged +
                '}';
     }
 }

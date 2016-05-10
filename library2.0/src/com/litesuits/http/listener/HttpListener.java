@@ -30,12 +30,17 @@ public abstract class HttpListener<Data> {
     private boolean readingNotify = false;
     private boolean uploadingNotify = false;
     private HttpListener<Data> linkedListener;
+    private long delayMillis;
 
     /**
      * default run on UI thread
      */
     public HttpListener() {
         this(true);
+    }
+
+    public HttpListener(long delayMillis) {
+        this.delayMillis = delayMillis;
     }
 
     public HttpListener(boolean runOnUiThread) {
@@ -52,8 +57,16 @@ public abstract class HttpListener<Data> {
         return linkedListener;
     }
 
-    public final HttpListener<Data> setLinkedListener(HttpListener<Data> linkedListener) {
-        this.linkedListener = linkedListener;
+    public final HttpListener<Data> setLinkedListener(HttpListener<Data> httpListener) {
+        if (this.linkedListener != null) {
+            HttpListener<Data> temp = this.linkedListener;
+            do {
+                if (httpListener == temp) {
+                    throw new RuntimeException("Circular refrence:  " + httpListener);
+                }
+            } while ((temp = temp.getLinkedListener()) != null);
+        }
+        this.linkedListener = httpListener;
         return this;
     }
 
@@ -89,6 +102,15 @@ public abstract class HttpListener<Data> {
         return this;
     }
 
+    public long getDelayMillis() {
+        return delayMillis;
+    }
+
+    public HttpListener<Data> setDelayMillis(long delayMillis) {
+        this.delayMillis = delayMillis;
+        return this;
+    }
+
     /**
      * note: hold an implicit reference to outter class
      */
@@ -100,6 +122,9 @@ public abstract class HttpListener<Data> {
         @Override
         @SuppressWarnings("unchecked")
         public void handleMessage(Message msg) {
+            if (disableListener()) {
+                return;
+            }
             Object[] data;
             switch (msg.what) {
                 case M_START:
@@ -158,6 +183,7 @@ public abstract class HttpListener<Data> {
     }
 
     public final void notifyCallSuccess(Data data, Response<Data> response) {
+        delayOrNot();
         if (disableListener()) {
             return;
         }
@@ -174,6 +200,7 @@ public abstract class HttpListener<Data> {
     }
 
     public final void notifyCallFailure(HttpException e, Response<Data> response) {
+        delayOrNot();
         if (disableListener()) {
             return;
         }
@@ -194,6 +221,7 @@ public abstract class HttpListener<Data> {
             HttpLog.w(TAG, "Request be Cancelled!  isCancelled: " + response.getRequest().isCancelled()
                            + "  Thread isInterrupted: " + Thread.currentThread().isInterrupted());
         }
+        delayOrNot();
         if (disableListener()) {
             return;
         }
@@ -292,6 +320,19 @@ public abstract class HttpListener<Data> {
             linkedListener.notifyCallEnd(response);
         }
     }
+
+    private boolean delayOrNot() {
+        if (delayMillis > 0) {
+            try {
+                Thread.sleep(delayMillis);
+                return true;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        return false;
+    }
+
     //____________ developer override method ____________
     public boolean disableListener() {
         return false;

@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2013 litesuits.com
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
 package com.litesuits.http;
 
 import android.annotation.TargetApi;
@@ -28,8 +43,7 @@ import com.litesuits.http.response.Response;
 import com.litesuits.http.utils.HttpUtil;
 
 import java.io.File;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
+import java.io.IOException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.FutureTask;
@@ -86,6 +100,12 @@ import java.util.concurrent.atomic.AtomicLong;
 //        * 7. 完善构建：提供 jar 包支持，后边支持 gradle 和 maven 。
 
 
+//        2.2.0 版本：
+//        1. 修复某些情况下参数无法拼接到URI的bug。
+//        2. http参数类增加通过注解指定Key，避免成员变量出现java关键词，同时增加动态URL构建；
+//        3. 每一个request可以直接接受注解参数和内部构建参数。
+
+
 /**
  * A simple, intelligent and flexible HTTP client for Android.
  * With LiteHttp you can make HTTP request with only one line of code!
@@ -124,9 +144,6 @@ public abstract class LiteHttp {
     protected AtomicLong memCachedSize = new AtomicLong();
     protected ConcurrentHashMap<String, HttpCache> memCache = new ConcurrentHashMap<String, HttpCache>();
 
-    //    protected LiteHttp(HttpConfig config) {
-    //        initConfig(config);
-    //    }
     protected LiteHttp() {}
 
     public static LiteHttp newApacheHttpClient(HttpConfig config) {
@@ -169,15 +186,6 @@ public abstract class LiteHttp {
         }
     }
 
-    /**
-     * when debugged is true, the {@link Log} is opened.
-     *
-     * @param debugged true if debugged
-     */
-    public void setDebugged(boolean debugged) {
-        HttpLog.isPrint = debugged;
-    }
-
     public final HttpConfig getConfig() {
         return config;
     }
@@ -190,35 +198,8 @@ public abstract class LiteHttp {
         return statisticsInfo;
     }
 
-    public final long clearMemCache() {
-        long len;
-        synchronized (lock) {
-            len = memCachedSize.get();
-            memCache.clear();
-            memCachedSize.set(0);
-        }
-        return len;
-    }
-
-    public final boolean deleteCachedFile(String cacehKey) {
-        File file = new File(config.cacheDirPath, cacehKey);
-        return file.delete();
-    }
-
-    public final long deleteCachedFiles() {
-        File file = new File(config.cacheDirPath);
-        long len = 0;
-        if (file.isDirectory()) {
-            File[] fs = file.listFiles();
-            if (fs != null) {
-                for (File f : fs) {
-                    len += f.length();
-                    f.delete();
-                }
-            }
-        }
-        return len;
-    }
+    protected abstract <T> void connectWithRetries(AbstractRequest<T> request, InternalResponse response)
+            throws HttpClientException, HttpNetException, HttpServerException;
 
     public <T> Response<T> execute(AbstractRequest<T> request) {
         final InternalResponse<T> response = handleRequest(request);
@@ -237,24 +218,18 @@ public abstract class LiteHttp {
                         + " , thread name: " + t.getName());
             }
             if (globalListener != null) {
-                globalListener.start(request);
+                globalListener.notifyCallStart(request);
             }
             if (listener != null) {
                 listener.notifyCallStart(request);
             }
-            CacheMode mode = request.getCacheMode();
-            if (mode == CacheMode.CacheFirst && tryHitCache(response)) {
+            if (request.getCacheMode() == CacheMode.CacheOnly) {
+                tryHitCache(response);
+                return response;
+            } else if (request.getCacheMode() == CacheMode.CacheFirst && tryHitCache(response)) {
                 return response;
             } else {
-                try {
-                    tryToConnectNetwork(request, response);
-                } finally {
-                    if (mode == CacheMode.NetFirst
-                        && !response.isResultOk()
-                        && !request.isCancelledOrInterrupted()) {
-                        tryHitCache(response);
-                    }
-                }
+                tryToConnectNetwork(request, response);
             }
         } catch (HttpException e) {
             e.printStackTrace();
@@ -268,8 +243,7 @@ public abstract class LiteHttp {
             try {
                 if (HttpLog.isPrint) {
                     Thread t = Thread.currentThread();
-                    HttpLog.i(TAG, "lite http response: " + response.getResult()
-                                   + " , uri: " + request.getUri()
+                    HttpLog.i(TAG, "lite http response: " + request.getUri()
                                    + " , tag: " + request.getTag()
                                    + " , method: " + request.getMethod()
                                    + " , cache mode: " + request.getCacheMode()
@@ -288,11 +262,11 @@ public abstract class LiteHttp {
                 }
                 if (globalListener != null) {
                     if (request.isCancelledOrInterrupted()) {
-                        globalListener.cancel(response.getResult(), response);
+                        globalListener.notifyCallCancel(response.getResult(), response);
                     } else if (httpException != null) {
-                        globalListener.failure(httpException, response);
+                        globalListener.notifyCallFailure(httpException, response);
                     } else {
-                        globalListener.success(response.getResult(), response);
+                        globalListener.notifyCallSuccess(response.getResult(), response);
                     }
                 }
             } catch (Throwable e) {
@@ -302,10 +276,7 @@ public abstract class LiteHttp {
         return response;
     }
 
-    protected abstract <T> void connectWithRetries(AbstractRequest<T> request, InternalResponse response)
-            throws HttpClientException, HttpNetException, HttpServerException;
-
-    public void executeAsync(final AbstractRequest request) {
+    public <T> void executeAsync(final AbstractRequest<T> request) {
         smartExecutor.execute(new Runnable() {
             @Override
             public void run() {
@@ -315,15 +286,13 @@ public abstract class LiteHttp {
     }
 
     public <T> Response<T> execute(HttpRichParamModel<T> model) {
-        Type type = ((ParameterizedType) model.getClass().getGenericSuperclass()).getActualTypeArguments()[0];
-        JsonRequest<T> request = new JsonRequest<T>(model, type);
-        return execute(request);
+        return execute(model.buildRequest());
     }
 
-    public <T> void executeAsync(HttpRichParamModel<T> model) {
-        Type type = ((ParameterizedType) model.getClass().getGenericSuperclass()).getActualTypeArguments()[0];
-        JsonRequest<T> request = new JsonRequest<T>(model, type);
+    public <T> JsonRequest<T> executeAsync(HttpRichParamModel<T> model) {
+        JsonRequest<T> request = model.buildRequest();
         executeAsync(request);
+        return request;
     }
 
     public <T> T perform(AbstractRequest<T> request) {
@@ -358,6 +327,10 @@ public abstract class LiteHttp {
         return perform(new StringRequest(uri).setMethod(HttpMethods.Get));
     }
 
+    public <T> T get(String uri, Class<T> claxx) {
+        return perform(new JsonRequest<T>(uri, claxx).setMethod(HttpMethods.Get));
+    }
+
     public <T> T get(AbstractRequest<T> request) {
         return perform(request.setMethod(HttpMethods.Get));
     }
@@ -388,7 +361,10 @@ public abstract class LiteHttp {
         if (request.getCacheMode() == null) {
             request.setCacheMode(config.defaultCacheMode);
         }
-        if (request.getCacheExpireMillis() == 0) {
+        if (request.getCacheDir() == null) {
+            request.setCacheDir(config.defaultCacheDir);
+        }
+        if (request.getCacheExpireMillis() < 0) {
             request.setCacheExpireMillis(config.defaultCacheExpireMillis);
         }
         if (request.getCharSet() == null) {
@@ -397,10 +373,10 @@ public abstract class LiteHttp {
         if (request.getMethod() == null) {
             request.setMethod(config.defaultHttpMethod);
         }
-        if (request.getMaxRedirectTimes() == 0) {
+        if (request.getMaxRedirectTimes() < 0) {
             request.setMaxRedirectTimes(config.defaultMaxRedirectTimes);
         }
-        if (request.getMaxRetryTimes() == 0) {
+        if (request.getMaxRetryTimes() < 0) {
             request.setMaxRetryTimes(config.defaultMaxRetryTimes);
         }
         if (request.getQueryBuilder() == null) {
@@ -454,7 +430,7 @@ public abstract class LiteHttp {
      * connect to network
      */
     protected <T> boolean tryToConnectNetwork(AbstractRequest<T> request, InternalResponse<T> response)
-            throws HttpNetException, HttpClientException, HttpServerException {
+            throws HttpNetException, HttpClientException, HttpServerException, IOException {
         StatisticsListener statistic = null;
         if (config.doStatistics) {
             statistic = new StatisticsListener(response, statisticsInfo);
@@ -478,6 +454,11 @@ public abstract class LiteHttp {
             if (statistic != null) {
                 statistic.onEnd(response);
             }
+            if (request.getCacheMode() == CacheMode.NetFirst
+                && !response.isResultOk()
+                && !request.isCancelledOrInterrupted()) {
+                tryHitCache(response);
+            }
         }
         return false;
     }
@@ -491,18 +472,18 @@ public abstract class LiteHttp {
      * </ul>
      */
     @SuppressWarnings("unchecked")
-    protected <T> boolean tryHitCache(InternalResponse<T> response) {
+    protected <T> boolean tryHitCache(InternalResponse<T> response) throws IOException {
         AbstractRequest<T> request = response.getRequest();
         String key = request.getCacheKey();
         long expire = request.getCacheExpireMillis();
         boolean isMemCacheSupport = request.getDataParser().isMemCacheSupport();
 
-        // 1. hit memory cache
+        // 1. try to hit memory cache
         if (isMemCacheSupport) {
             HttpCache<T> cache = (HttpCache<T>) memCache.get(key);
             if (cache != null) {
-                // memory hit!
-                if (expire <= 0 || expire > getCurrentTimeMillis() - cache.time) {
+                if (expire < 0 || expire > getCurrentTimeMillis() - cache.time) {
+                    // memory hit!
                     request.getDataParser().readFromMemoryCache(cache.data);
                     response.setCacheHit(true);
                     if (HttpLog.isPrint) {
@@ -518,11 +499,11 @@ public abstract class LiteHttp {
             }
         }
 
-        // 2. hit disk cache
-        File file = request.getDataParser().getSpecifyFile(config.cacheDirPath);
+        // 2. try to hit disk cache
+        File file = request.getCachedFile();
         if (file.exists()) {
-            // disk hit!
-            if (expire <= 0 || expire > getCurrentTimeMillis() - file.lastModified()) {
+            if (expire < 0 || expire > getCurrentTimeMillis() - file.lastModified()) {
+                // disk hit!
                 request.getDataParser().readFromDiskCache(file);
                 response.setCacheHit(true);
                 if (HttpLog.isPrint) {
@@ -544,7 +525,7 @@ public abstract class LiteHttp {
      */
     protected <T> boolean tryToKeepCacheInMemory(InternalResponse<T> response) {
         AbstractRequest<T> request = response.getRequest();
-        if (request.needCache()) {
+        if (request.isCachedModel()) {
             DataParser<T> dataParser = request.getDataParser();
             if (HttpLog.isPrint) {
                 HttpLog.v(TAG, "lite http try to keep cache.. maximum cache len: " + config.maxMemCacheBytesSize
@@ -583,6 +564,56 @@ public abstract class LiteHttp {
             }
         }
         return false;
+    }
+
+    public final long cleanCacheForRequest(AbstractRequest request) {
+        long len = 0;
+        if (request.getCacheDir() == null) {
+            request.setCacheDir(config.defaultCacheDir);
+        }
+        synchronized (lock) {
+            if (memCache.get(request.getCacheKey()) != null) {
+                HttpCache cache = memCache.remove(request.getCacheKey());
+                len = cache.length;
+                memCachedSize.addAndGet(-len);
+            }
+        }
+        File file = request.getCachedFile();
+        if (file != null) {
+            len = file.length();
+            file.delete();
+        }
+        return len;
+    }
+
+    public final long clearMemCache() {
+        long len;
+        synchronized (lock) {
+            len = memCachedSize.get();
+            memCache.clear();
+            memCachedSize.set(0);
+        }
+        return len;
+    }
+
+    public final boolean deleteCachedFile(String cacehKey) {
+        File file = new File(config.defaultCacheDir, cacehKey);
+        return file.delete();
+    }
+
+    public final long deleteCachedFiles() {
+        File file = new File(config.defaultCacheDir);
+        long len = 0;
+        if (file.isDirectory()) {
+            File[] fs = file.listFiles();
+            if (fs != null) {
+                for (File f : fs) {
+                    len += f.length();
+                    f.delete();
+                }
+            }
+        }
+        return len;
     }
 
     protected long getCurrentTimeMillis() {

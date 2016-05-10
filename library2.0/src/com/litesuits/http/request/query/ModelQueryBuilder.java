@@ -2,10 +2,9 @@ package com.litesuits.http.request.query;
 
 import com.litesuits.http.data.Charsets;
 import com.litesuits.http.data.Consts;
-import com.litesuits.http.request.param.HttpCustomParam;
+import com.litesuits.http.data.NameValuePair;
+import com.litesuits.http.request.param.*;
 import com.litesuits.http.request.param.HttpCustomParam.CustomValueBuilder;
-import com.litesuits.http.request.param.HttpParamModel;
-import com.litesuits.http.request.param.NonHttpParam;
 
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Field;
@@ -16,6 +15,8 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.Map;
 
 /**
  * abstract class for build parameter of request url.
@@ -27,6 +28,25 @@ public abstract class ModelQueryBuilder {
 
     protected String charSet = Charsets.UTF_8;
 
+    public LinkedList<NameValuePair> buildPrimaryPairSafely(HttpParamModel model) {
+        try {
+            return buildPrimaryPair(model);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public LinkedList<NameValuePair> buildPrimaryPair(HttpParamModel model) throws IllegalArgumentException,
+            IllegalAccessException, InvocationTargetException, UnsupportedEncodingException {
+        LinkedHashMap<String, String> map = buildPrimaryMap(model);
+        LinkedList<NameValuePair> list = new LinkedList<NameValuePair>();
+        for (Map.Entry<String, String> entry : map.entrySet()) {
+            list.add(new NameValuePair(entry.getKey(), entry.getValue()));
+        }
+        return list;
+    }
+
     public LinkedHashMap<String, String> buildPrimaryMap(HttpParamModel model) throws IllegalArgumentException,
             IllegalAccessException, InvocationTargetException, UnsupportedEncodingException {
         if (model == null) { return null; }
@@ -37,7 +57,8 @@ public abstract class ModelQueryBuilder {
         for (int i = 0, size = fieldList.size(); i < size; i++) {
             Field f = fieldList.get(i);
             f.setAccessible(true);
-            String key = f.getName();
+            HttpParam keyAnno = f.getAnnotation(HttpParam.class);
+            String key = keyAnno != null ? keyAnno.value() : f.getName();
             Object value = f.get(model);
             if (value != null) {
                 // value is primitive
@@ -101,7 +122,7 @@ public abstract class ModelQueryBuilder {
     protected static ArrayList<Field> getAllDeclaredFields(Class<?> claxx) {
         // find all field.
         ArrayList<Field> fieldList = new ArrayList<Field>();
-        while (claxx != null && claxx != Object.class) {
+        while (claxx != null && claxx != HttpRichParamModel.class && claxx != Object.class) {
             Field[] fs = claxx.getDeclaredFields();
             for (int i = 0; i < fs.length; i++) {
                 Field f = fs[i];

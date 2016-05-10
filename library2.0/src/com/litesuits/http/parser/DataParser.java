@@ -23,24 +23,30 @@ public abstract class DataParser<T> {
     protected String charSet = Consts.DEFAULT_CHARSET;
     protected int buffSize = HttpConfig.DEFAULT_BUFFER_SIZE;
 
-    public DataParser(AbstractRequest<T> request) {
-        this.request = request;
-        if (request.getCharSet() != null) {
-            charSet = request.getCharSet();
-        }
-    }
-
-    public final T readFromNetStream(InputStream stream, long len, String charSet, String cacheDir) throws IOException {
+    /**
+     * source 1. read data form network
+     */
+    public T readFromNetStream(InputStream stream, long len,
+                               String charSet) throws IOException {
         if (stream != null) {
             try {
-                data = parseNetStream(stream, len, charSet, cacheDir);
+                this.data = parseNetStream(stream, len, charSet);
             } finally {
                 stream.close();
             }
         }
-        return data;
+        return this.data;
     }
 
+    /**
+     * source 2. read data form disk
+     */
+    public abstract T readFromDiskCache(File file) throws IOException;
+
+
+    /**
+     * source 3. read data form network
+     */
     public final T readFromMemoryCache(T data) {
         if (isMemCacheSupport()) {
             this.data = data;
@@ -48,47 +54,16 @@ public abstract class DataParser<T> {
         return this.data;
     }
 
-    public abstract T readFromDiskCache(File file);
-
     /**
      * parse network stream
      */
-    protected abstract T parseNetStream(InputStream stream, long totalLength, String charSet, String cacheDir)
-            throws IOException;
-
-    /**
-     * translate original bytes to custom bytes.
-     * if your data is encrypted, you can override this method to decrypt it.
-     *
-     * @param bytes data form server
-     * @return decrypt data
-     */
-    protected byte[] translateBytes(byte[] bytes) {
-        return bytes;
-    }
-
-    /**
-     * notify readed length to listener
-     */
-    protected final void notifyReading(long total, long len) {
-        HttpListener<T> listener = request.getHttpListener();
-        if (listener != null) {
-            listener.notifyCallLoading(request, total, len);
-        }
-    }
+    protected abstract T parseNetStream(InputStream stream, long totalLength,
+                                        String charSet) throws IOException;
 
     /**
      * is memory cache supported
      */
     public abstract boolean isMemCacheSupport();
-
-    /**
-     * get cache file name, null will save to default path.
-     *
-     * @return custom data
-     */
-    public abstract File getSpecifyFile(String dir);
-
 
     /**
      * get the data
@@ -119,6 +94,27 @@ public abstract class DataParser<T> {
 
     public String getRawString() {
         return null;
+    }
+
+    /**
+     * translate original bytes to custom bytes.
+     * if your data is encrypted, you can override this method to decrypt it.
+     *
+     * @param bytes data form server
+     * @return decrypt data
+     */
+    protected byte[] translateBytes(byte[] bytes) {
+        return bytes;
+    }
+
+    /**
+     * notify readed length to listener
+     */
+    protected final void notifyReading(long total, long len) {
+        HttpListener<T> listener = request.getHttpListener();
+        if (listener != null) {
+            listener.notifyCallLoading(request, total, len);
+        }
     }
 
     @Override

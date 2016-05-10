@@ -1,7 +1,6 @@
 package com.litesuits.http.parser;
 
 import com.litesuits.http.log.HttpLog;
-import com.litesuits.http.request.AbstractRequest;
 import com.litesuits.http.utils.StringCodingUtils;
 import org.apache.http.util.ByteArrayBuffer;
 import org.apache.http.util.CharArrayBuffer;
@@ -10,54 +9,41 @@ import java.io.*;
 import java.nio.charset.Charset;
 
 /**
- * parse inputstream to string.
+ * MemCacheableParser: parse inputstream to data ,save to mem and sdcard.
  *
  * @author MaTianyu
  *         2014-2-21下午8:56:59
  */
-public abstract class MemeoryDataParser<T> extends DataParser<T> {
+public abstract class MemCacheableParser<T> extends DataParser<T> {
 
-    public MemeoryDataParser(AbstractRequest<T> request) {
-        super(request);
+    public final T readFromNetStream(InputStream stream, long len, String charSet) throws IOException {
+        this.data = super.readFromNetStream(stream, len, charSet);
+        if (this.data != null && request.isCachedModel()) {
+            tryKeepToCache(data);
+        }
+        return this.data;
     }
 
-    @Override
-    public boolean isMemCacheSupport() {
-        return true;
-    }
-
-    @Override
-    public File getSpecifyFile(String dir) {
-        return new File(dir, request.getCacheKey());
-    }
-
-    protected abstract T parseDiskCache(InputStream stream, long length) throws IOException;
-
-    /**
-     * read local file and parse to T
-     *
-     * @param file local cache file
-     * @return T
-     */
-    public T readFromDiskCache(File file) {
+    public final T readFromDiskCache(File file) throws IOException {
         FileInputStream fos = null;
         try {
             fos = new FileInputStream(file);
             data = parseDiskCache(fos, file.length());
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
         } finally {
             if (fos != null) {
-                try {
-                    fos.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                fos.close();
             }
         }
         return data;
+    }
+
+    protected abstract T parseDiskCache(InputStream stream, long length) throws IOException;
+
+    protected abstract boolean tryKeepToCache(T data) throws IOException;
+
+    @Override
+    public boolean isMemCacheSupport() {
+        return true;
     }
 
     /**
@@ -87,12 +73,9 @@ public abstract class MemeoryDataParser<T> extends DataParser<T> {
                     readLength += l;
                 }
                 return translateBytes(swapStream.toByteArray());
-            } catch (IOException e) {
-                e.printStackTrace();
             } finally {
                 swapStream.close();
             }
-            return null;
         }
     }
 
@@ -110,11 +93,10 @@ public abstract class MemeoryDataParser<T> extends DataParser<T> {
     /**
      * parse input stream to string.
      *
-     * @param stream input stream
-     * @param len total len
+     * @param stream  input stream
+     * @param len     total len
      * @param charSet char set
      * @return string data
-     * @throws IOException
      */
     protected final String streamToString(InputStream stream, long len, String charSet) throws IOException {
         if (len > 0) {
@@ -145,20 +127,26 @@ public abstract class MemeoryDataParser<T> extends DataParser<T> {
                     notifyReading(len, readLength);
                 }
                 return translateString(swapStream.toString(charSet));
-            } catch (IOException e) {
-                e.printStackTrace();
             } finally {
                 swapStream.close();
             }
-            return null;
         }
 
     }
 
-    protected final void keepToCache(byte[] data, File file) {
+
+    protected final boolean keepToCache(String src) throws IOException {
+        if (src != null) {
+            return keepToCache(StringCodingUtils.getBytes(src, Charset.forName(charSet)));
+        }
+        return false;
+    }
+
+    protected final boolean keepToCache(byte[] data) throws IOException {
         if (data != null) {
             FileOutputStream fos = null;
             try {
+                File file = request.getCachedFile();
                 File pFile = file.getParentFile();
                 if (!pFile.exists()) {
                     boolean mk = pFile.mkdirs();
@@ -166,37 +154,25 @@ public abstract class MemeoryDataParser<T> extends DataParser<T> {
                         HttpLog.i(TAG, "keep cache mkdirs result: " + mk + "  path:" + pFile.getAbsolutePath());
                     }
                 }
-                //if (!file.exists()) {
-                //    boolean cf = file.createNewFile();
-                //    HttpLog.v(TAG, "keep cache create file result: " + cf + "  path:" + file.getAbsolutePath());
-                //}
                 fos = new FileOutputStream(file);
                 fos.write(data);
+                fos.flush();
                 if (HttpLog.isPrint) {
                     HttpLog.v(TAG,
-                              "lite http keep disk cache success, "
-                              + "   tag: " + request.getTag()
-                              + "   url: " + request.getUri()
-                              + "   key: " + request.getCacheKey()
-                              + "   path: " + file.getAbsolutePath());
+                            "lite http keep disk cache success, "
+                            + "   tag: " + request.getTag()
+                            + "   url: " + request.getUri()
+                            + "   key: " + request.getCacheKey()
+                            + "   path: " + file.getAbsolutePath());
                 }
-            } catch (IOException e) {
-                e.printStackTrace();
+                return true;
+            } finally {
                 if (fos != null) {
-                    try {
-                        fos.close();
-                    } catch (IOException e1) {
-                        e1.printStackTrace();
-                    }
+                    fos.close();
                 }
             }
         }
-    }
-
-    protected final void keepToCache(String src, File file) {
-        if (data != null) {
-            keepToCache(StringCodingUtils.getBytes(src, Charset.forName(charSet)), file);
-        }
+        return false;
     }
 
     //    protected byte[] getBytes(String src, Charset charSet) {
